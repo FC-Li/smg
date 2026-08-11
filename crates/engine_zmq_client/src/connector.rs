@@ -421,14 +421,14 @@ impl<P: EngineProtocol> Drop for Client<P> {
 /// PUSH peer vanishes — so silence is the only available death signal. Generous
 /// so a slow first token never trips it, while still bounding an otherwise
 /// infinite hang.
+const ENGINE_SILENCE_DEATH_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// Maximum time to wait for a single request frame to be accepted by an engine's
 /// input socket before treating the engine as wedged. A healthy engine drains its
 /// input continuously; a send that blocks this long means its event loop is stuck.
 /// Bounds an otherwise unbounded await under the shared input lock (see
 /// [`ClientInner::send_to_engine`]).
 const ENGINE_SEND_TIMEOUT: Duration = Duration::from_secs(10);
-
-const ENGINE_SILENCE_DEATH_TIMEOUT: Duration = Duration::from_secs(300);
 
 async fn run_dispatcher<P: EngineProtocol>(
     mut out_rx: mpsc::Receiver<Result<EngineBatch<P::Output>>>,

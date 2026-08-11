@@ -8,7 +8,10 @@ use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use once_cell::sync::Lazy;
 
 // Interned strings are never freed; only intern low-cardinality, server-controlled
-// labels (model IDs, worker URLs, normalized paths), never user-controlled input.
+// labels (worker URLs, normalized paths), never user-controlled input. Client- or
+// model-controlled labels (`model`, MCP tool name) must go through the bounded
+// interner (`intern_model_label` / `intern_tool_label`) below, which caps
+// cardinality — do NOT route them through `intern_string`.
 
 /// Global string interner for metric labels.
 /// Uses DashMap for lock-free concurrent access.

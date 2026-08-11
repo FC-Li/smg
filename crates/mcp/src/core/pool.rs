@@ -116,31 +116,35 @@ pub(crate) enum UrlLookup {
     Ambiguous,
 }
 
-/// How many pooled keys share a given URL (credential/tenant-agnostic).
+/// Outcome of matching pooled `(key, value)` entries against a URL, carrying the
+/// single matched value when unambiguous. Two or more matches means the URL is
+/// reachable under different credentials/tenants and cannot be resolved to a
+/// single connection safely.
 #[derive(Debug, PartialEq, Eq)]
-enum UrlMatch {
+enum UrlMatch<T> {
     None,
-    Unique,
+    Unique(T),
     Ambiguous,
 }
 
-/// Classify how many pooled keys match `url`. Two or more matches means the URL
-/// is reachable under different credentials/tenants and therefore cannot be
-/// resolved to a single connection safely.
-fn classify_url_match<'a>(keys: impl Iterator<Item = &'a PoolKey>, url: &str) -> UrlMatch {
-    let mut count = 0usize;
-    for key in keys {
+/// Single-pass classification of pooled `(key, value)` entries against `url`,
+/// returning the matched value on a unique hit so callers need not scan twice.
+fn classify_url_match<'a, T>(
+    entries: impl Iterator<Item = (&'a PoolKey, T)>,
+    url: &str,
+) -> UrlMatch<T> {
+    let mut found: Option<T> = None;
+    for (key, value) in entries {
         if key.url == url {
-            count += 1;
-            if count > 1 {
+            if found.is_some() {
                 return UrlMatch::Ambiguous;
             }
+            found = Some(value);
         }
     }
-    if count == 0 {
-        UrlMatch::None
-    } else {
-        UrlMatch::Unique
+    match found {
+        Some(value) => UrlMatch::Unique(value),
+        None => UrlMatch::None,
     }
 }
 
@@ -280,13 +284,10 @@ impl McpConnectionPool {
     /// **O(n)** — linear scan under the lock (n ≤ `max_connections`).
     pub(crate) fn get_unique_by_url(&self, url: &str) -> UrlLookup {
         let connections = self.connections.lock();
-        match classify_url_match(connections.iter().map(|(key, _)| key), url) {
+        match classify_url_match(connections.iter(), url) {
             UrlMatch::None => UrlLookup::NotFound,
             UrlMatch::Ambiguous => UrlLookup::Ambiguous,
-            UrlMatch::Unique => match connections.iter().find(|(key, _)| key.url == url) {
-                Some((_, cached)) => UrlLookup::Found(Arc::clone(&cached.client)),
-                None => UrlLookup::NotFound,
-            },
+            UrlMatch::Unique(cached) => UrlLookup::Found(Arc::clone(&cached.client)),
         }
     }
 }
@@ -511,22 +512,24 @@ mod tests {
         // Same URL and auth, different tenant.
         let a_diff_tenant = PoolKey::new(url, 111, Some("tenant-2".to_string()));
 
+        // Values are `()` here — the classifier is exercised for the key match;
+        // `get_unique_by_url` supplies the real `CachedConnection` values.
         assert_eq!(
-            classify_url_match([&other].into_iter(), url),
+            classify_url_match([(&other, ())].into_iter(), url),
             UrlMatch::None
         );
         assert_eq!(
-            classify_url_match([&other, &a].into_iter(), url),
-            UrlMatch::Unique
+            classify_url_match([(&other, ()), (&a, ())].into_iter(), url),
+            UrlMatch::Unique(())
         );
         // Different credentials on the same URL must never resolve to one entry.
         assert_eq!(
-            classify_url_match([&a, &b_diff_auth].into_iter(), url),
+            classify_url_match([(&a, ()), (&b_diff_auth, ())].into_iter(), url),
             UrlMatch::Ambiguous
         );
         // Different tenants on the same URL are equally ambiguous.
         assert_eq!(
-            classify_url_match([&a, &a_diff_tenant].into_iter(), url),
+            classify_url_match([(&a, ()), (&a_diff_tenant, ())].into_iter(), url),
             UrlMatch::Ambiguous
         );
     }

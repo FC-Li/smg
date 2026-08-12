@@ -61,8 +61,6 @@ class RouterArgs:
     balance_rel_threshold: float = 1.5
     balance_token_usage_threshold: float = 1.0
     overload_token_usage_threshold: float = 1.0
-    overlap_decay: float = 0.0
-    selection_temperature: float = 0.0
     eviction_interval_secs: int = 60
     max_tree_size: int = 2**26
     block_size: int = 16
@@ -208,6 +206,8 @@ class RouterArgs:
     worker_startup_delay: int = 0
     # DP engines per startup ZMQ worker (grouped worker; None/1 = ungrouped)
     zmq_engine_count: int | None = None
+    overlap_decay: float = 0.0
+    selection_temperature: float = 0.0
 
     @staticmethod
     def add_cli_args(

@@ -346,6 +346,7 @@ mod tests {
         let bytes = rmp_serde::to_vec_named(&json).unwrap();
         let resp: EngineCoreReadyResponse = decode_msgpack(&bytes).unwrap();
         assert!(resp.takes_generate());
+        assert!(!resp.lists_request_kind(REQUEST_KIND_ENCODE));
         assert_eq!(resp.disaggregation_role(), None);
         assert_eq!(resp.bootstrap_address(), None);
     }

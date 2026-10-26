@@ -7934,6 +7934,7 @@ dependencies = [
 name = "smg-rl"
 version = "0.2.0"
 dependencies = [
+ "async-trait",
  "axum",
  "futures",
  "http",

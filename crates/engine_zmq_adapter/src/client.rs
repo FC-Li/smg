@@ -1374,6 +1374,29 @@ impl ZmqEngineClient {
         Ok(aggregate_control(&results, ok_message))
     }
 
+    /// One RL or weight operation on every connected rank: the TokenSpeed
+    /// scheduler's control call `method` (`pause_generation`,
+    /// `update_weights_from_distributed`, ...), its argument `body`, the JSON
+    /// body of the engine's HTTP route of the same name (none when `None`).
+    /// Each rank's `(success, message)`, in engine order; `wait` bounds each
+    /// rank's reply (DEADLINE_EXCEEDED). Only a TokenSpeed scheduler of the
+    /// control-wire revision serves these calls; any other engine answers
+    /// UNIMPLEMENTED naming the gap.
+    pub async fn rl_control_call(
+        &self,
+        method: &str,
+        body: Option<serde_json::Value>,
+        wait: Duration,
+    ) -> Result<Vec<(bool, String)>, tonic::Status> {
+        if !matches!(&self.backend, ZmqBackend::TokenSpeed(_)) {
+            return Err(tonic::Status::unimplemented(format!(
+                "{method} is served over the engine connection by a TokenSpeed scheduler only"
+            )));
+        }
+        let args = body.map(json_to_msgpack).into_iter().collect();
+        self.control_calls(method, method, args, wait).await
+    }
+
     /// Local liveness: false once the connection observed `ENGINE_CORE_DEAD` or
     /// a transport failure. No RPC (the raw ZMQ wire has no health RPC).
     pub fn is_alive(&self) -> bool {
@@ -1729,6 +1752,34 @@ async fn control_on_every_rank<P: EngineProtocol>(
         .await
         .map_err(utility_status)?;
     Ok(replies.iter().map(control_outcome).collect())
+}
+
+/// A JSON value as the msgpack value the engine's control call reads: maps
+/// keep their string keys, an integer stays an integer.
+fn json_to_msgpack(value: serde_json::Value) -> OpaqueValue {
+    match value {
+        serde_json::Value::Null => OpaqueValue::Nil,
+        serde_json::Value::Bool(value) => OpaqueValue::Boolean(value),
+        serde_json::Value::Number(number) => {
+            if let Some(value) = number.as_i64() {
+                OpaqueValue::from(value)
+            } else if let Some(value) = number.as_u64() {
+                OpaqueValue::from(value)
+            } else {
+                OpaqueValue::F64(number.as_f64().unwrap_or(f64::NAN))
+            }
+        }
+        serde_json::Value::String(value) => OpaqueValue::from(value),
+        serde_json::Value::Array(items) => {
+            OpaqueValue::Array(items.into_iter().map(json_to_msgpack).collect())
+        }
+        serde_json::Value::Object(fields) => OpaqueValue::Map(
+            fields
+                .into_iter()
+                .map(|(key, value)| (OpaqueValue::from(key), json_to_msgpack(value)))
+                .collect(),
+        ),
+    }
 }
 
 /// A utility call's error as a status: the wait expiring is the caller's
@@ -2361,6 +2412,96 @@ mod tests {
         silent
             .check_declared_role(Some("prefill"))
             .expect("an engine that declares nothing is not checked");
+    }
+
+    /// An RL operation rides the TokenSpeed control wire as a control call
+    /// named after its route, with the route's JSON body as its one argument
+    /// (a map, integers kept integers), answered on every rank under the call
+    /// id; a call without a body carries no argument.
+    #[tokio::test]
+    async fn an_rl_operation_rides_the_control_wire_with_its_routes_body() {
+        use engine_zmq_client::{
+            codec::{decode_msgpack, encode_msgpack},
+            protocol::{control::ControlReplySlim, tokenspeed::request::TokenSpeedRequestType},
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let ep = |name: &str| format!("ipc://{}", dir.path().join(name).display());
+        let (handshake, input, output) = (ep("hs.sock"), ep("in.sock"), ep("out.sock"));
+        let ready = EngineCoreReadyResponse {
+            positional_layouts: BTreeMap::from([(
+                "ControlReplySlim".to_string(),
+                ["call_id", "success", "message", "engine_index"]
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+            )]),
+            ..default_ready_response()
+        };
+        let (client, engine) = tokio::join!(
+            ZmqEngineClient::connect(
+                &handshake,
+                &input,
+                &output,
+                1,
+                "org/repo".to_string(),
+                EosTokenIds::default(),
+                RuntimeType::TokenSpeed,
+                Duration::from_secs(10)
+            ),
+            connect_to_frontend(&handshake, EngineId::from_engine_index(0), ready),
+        );
+        let client = client.expect("adapter connect");
+        let (mut engine_in, mut engine_out) = engine.expect("mock engine").split();
+        let wait = Duration::from_secs(10);
+        for (method, body, success) in [
+            (
+                "update_weights_from_mooncake",
+                Some(serde_json::json!({"version": 7, "flush_cache": false})),
+                true,
+            ),
+            ("continue_generation", None, false),
+        ] {
+            let (replies, ()) = tokio::join!(client.rl_control_call(method, body.clone(), wait), async {
+                let frames = engine_in.recv_frames().await.unwrap();
+                assert_eq!(
+                    TokenSpeedRequestType::from_frame(frames[0].as_ref()),
+                    Some(TokenSpeedRequestType::Control)
+                );
+                let (call_id, called, args): (i64, String, Vec<OpaqueValue>) =
+                    decode_msgpack(frames[1].as_ref()).unwrap();
+                assert_eq!(called, method);
+                match &body {
+                    Some(_) => {
+                        let fields = args[0].as_map().expect("the body as a map");
+                        assert!(fields.iter().any(|(key, value)| {
+                            key.as_str() == Some("version") && *value == OpaqueValue::from(7i64)
+                        }));
+                        assert!(fields.iter().any(|(key, value)| {
+                            key.as_str() == Some("flush_cache")
+                                && *value == OpaqueValue::Boolean(false)
+                        }));
+                    }
+                    None => assert!(args.is_empty()),
+                }
+                let reply = ControlReplySlim {
+                    call_id,
+                    success,
+                    message: (!success).then(|| "not paused".to_string()),
+                    engine_index: 0,
+                };
+                engine_out
+                    .send_frames(vec![bytes::Bytes::from(encode_msgpack(&reply).unwrap())])
+                    .await
+                    .unwrap();
+            });
+            let replies = replies.expect("one reply per rank");
+            assert_eq!(replies.len(), 1);
+            assert_eq!(replies[0].0, success);
+            if !success {
+                assert!(replies[0].1.contains("not paused"), "{replies:?}");
+            }
+        }
     }
 
     #[tokio::test]

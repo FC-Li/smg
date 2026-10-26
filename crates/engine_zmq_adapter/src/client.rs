@@ -623,6 +623,33 @@ impl ZmqEngineClient {
         self.engines().len()
     }
 
+    /// Check the disaggregation role every connected engine declared against
+    /// `registered`, the role its worker is registered for (`None` for one
+    /// that serves whole requests): a prefill engine registered as a decode
+    /// worker, or a whole-request engine as either, fails its connection with
+    /// both roles named instead of failing every request it takes. An engine
+    /// that predates the declaration (it lists no request types) is not
+    /// checked.
+    pub fn check_declared_role(&self, registered: Option<&str>) -> Result<(), String> {
+        for engine in self.engines() {
+            let ready = &engine.ready_response;
+            if ready.request_types.is_empty() {
+                continue;
+            }
+            let declared = ready.disaggregation_role();
+            if declared != registered {
+                return Err(format!(
+                    "engine {:?} declared disaggregation role {} but its worker is registered \
+                     as {}",
+                    engine.engine_id,
+                    declared.unwrap_or("none (whole requests)"),
+                    registered.unwrap_or("a regular worker"),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// The engine's context window as the ready handshake reported it (`0`
     /// from an engine that reported none), the bound every wire's prompt
     /// admission applies ([`crate::context_window`]); a connected engine is
@@ -2142,6 +2169,81 @@ mod tests {
             .map(|engine| engine.expect("mock engine"))
             .collect();
         (client.expect("adapter connect"), engines)
+    }
+
+    /// A TokenSpeed connection whose ranks declared `ready` at their
+    /// handshake, one rank per response.
+    async fn tokenspeed_ranks(dir: &Path, ready: Vec<EngineCoreReadyResponse>) -> ZmqEngineClient {
+        std::fs::create_dir_all(dir).unwrap();
+        let ep = |name: &str| format!("ipc://{}", dir.join(name).display());
+        let (handshake, input, output) = (ep("hs.sock"), ep("in.sock"), ep("out.sock"));
+        let count = ready.len();
+        let ranks = ready.into_iter().enumerate().map(|(rank, ready)| {
+            connect_to_frontend(&handshake, EngineId::from_engine_index(rank as u32), ready)
+        });
+        let (client, engines) = tokio::join!(
+            ZmqEngineClient::connect(
+                &handshake,
+                &input,
+                &output,
+                count,
+                "org/repo".to_string(),
+                EosTokenIds::default(),
+                RuntimeType::TokenSpeed,
+                Duration::from_secs(10)
+            ),
+            futures::future::join_all(ranks),
+        );
+        for engine in engines {
+            engine.expect("mock engine");
+        }
+        client.expect("adapter connect")
+    }
+
+    /// A worker registered for a disaggregated role connects only to engines
+    /// that declared that role: a prefill rank among a decode worker's, or a
+    /// whole-request engine behind a prefill worker, fails the check with both
+    /// roles named. An engine that declares no request types predates the
+    /// declaration and is taken as registered.
+    #[tokio::test]
+    async fn a_worker_connects_only_to_engines_of_its_registered_role() {
+        let declaring = |role: Option<&str>| EngineCoreReadyResponse {
+            request_types: vec!["add".into(), "abort".into(), "control".into()],
+            disaggregation_mode: role.map(str::to_string),
+            ..default_ready_response()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let prefill = tokenspeed_ranks(
+            &dir.path().join("p"),
+            vec![declaring(Some("prefill")), declaring(Some("prefill"))],
+        )
+        .await;
+        prefill.check_declared_role(Some("prefill")).expect("prefill engines");
+        let error = prefill.check_declared_role(Some("decode")).unwrap_err();
+        assert!(
+            error.contains("declared disaggregation role prefill") && error.contains("as decode"),
+            "{error}"
+        );
+        let error = prefill.check_declared_role(None).unwrap_err();
+        assert!(error.contains("as a regular worker"), "{error}");
+
+        let mixed = tokenspeed_ranks(
+            &dir.path().join("m"),
+            vec![declaring(Some("decode")), declaring(Some("prefill"))],
+        )
+        .await;
+        let error = mixed.check_declared_role(Some("decode")).unwrap_err();
+        assert!(error.contains("declared disaggregation role prefill"), "{error}");
+
+        let whole = tokenspeed_ranks(&dir.path().join("w"), vec![declaring(None)]).await;
+        whole.check_declared_role(None).expect("a whole-request engine");
+        let error = whole.check_declared_role(Some("prefill")).unwrap_err();
+        assert!(error.contains("none (whole requests)"), "{error}");
+
+        let silent = tokenspeed_ranks(&dir.path().join("s"), vec![default_ready_response()]).await;
+        silent
+            .check_declared_role(Some("prefill"))
+            .expect("an engine that declares nothing is not checked");
     }
 
     #[tokio::test]

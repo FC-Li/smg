@@ -52,16 +52,28 @@ const PROFILE_HTTP_TIMEOUT: Duration = Duration::from_secs(630);
 /// Connect the ZMQ backend for this worker URL. All connect mechanics —
 /// address derivation, socket-dir prep, EOS resolution, handshake — live in
 /// the client layer ([`zmq_client::connect_for_worker`]); the worker layer
-/// only wraps the client into its slot and error type.
+/// wraps the client into its slot and error type, after checking the role
+/// each engine declared at the handshake against `worker_type`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the worker's connection inputs, captured by the detached connect driver"
+)]
 async fn connect_zmq_backend(
     base_url: String,
     model_id: String,
     runtime: RuntimeType,
+    worker_type: WorkerType,
     handshake_override: Option<String>,
     engine_count: usize,
     startup: Duration,
     request_timeout: Option<Duration>,
 ) -> WorkerResult<Arc<BackendClient>> {
+    let registered_role = match worker_type {
+        WorkerType::Regular => None,
+        WorkerType::Prefill => Some("prefill"),
+        WorkerType::Decode => Some("decode"),
+        WorkerType::Encode => Some("encode"),
+    };
     zmq_client::connect_for_worker(
         &base_url,
         model_id,
@@ -72,7 +84,10 @@ async fn connect_zmq_backend(
         request_timeout,
     )
     .await
-    .map(|client| Arc::new(BackendClient::Zmq(client)))
+    .and_then(|client| {
+        client.check_declared_role(registered_role)?;
+        Ok(Arc::new(BackendClient::Zmq(client)))
+    })
     .map_err(|reason| WorkerError::ConnectionFailed {
         url: base_url,
         reason,
@@ -861,6 +876,14 @@ pub trait Worker: Send + Sync + fmt::Debug + 'static {
         self.metadata().bootstrap_port()
     }
 
+    /// The bootstrap rendezvous the worker's engine declared at its handshake
+    /// (`host`, `port`): a TokenSpeed engine on the direct ZMQ lane says where
+    /// its bootstrap server listens. `None` for a worker whose engine declared
+    /// none or has not connected.
+    fn declared_bootstrap(&self) -> Option<(String, u16)> {
+        None
+    }
+
     /// Get the base URL without any DP rank suffix.
     fn base_url(&self) -> &str {
         self.metadata().base_url()
@@ -1371,6 +1394,7 @@ impl BasicWorker {
         let model_id = self.metadata.model_id().to_string();
         let url = self.metadata.spec.url.clone();
         let runtime = self.metadata.spec.runtime_type;
+        let worker_type = self.metadata.spec.worker_type;
         let handshake_override = self.metadata.spec.zmq_handshake_address.clone();
         let engine_count = self.metadata.zmq_engine_count();
         let startup = self.metadata.zmq_startup_timeout;
@@ -1393,6 +1417,7 @@ impl BasicWorker {
                         base_url,
                         model_id,
                         runtime,
+                        worker_type,
                         handshake_override,
                         engine_count,
                         startup,
@@ -1529,6 +1554,15 @@ impl BasicWorker {
 
 #[async_trait]
 impl Worker for BasicWorker {
+    fn declared_bootstrap(&self) -> Option<(String, u16)> {
+        let cell = self.backend_client.load_full();
+        let BackendClient::Zmq(client) = cell.get()?.as_ref() else {
+            return None;
+        };
+        let (host, port) = client.ready_response()?.bootstrap_address()?;
+        Some((host.to_string(), port))
+    }
+
     /// [`BasicWorker`] keeps the trait's default `prepare_request`, so the
     /// HTTP proxy path may apply the DP-rank edit on raw slices.
     fn uses_builtin_prepare_request(&self) -> bool {

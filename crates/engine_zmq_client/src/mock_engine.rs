@@ -92,6 +92,16 @@ pub fn default_ready_response() -> EngineCoreReadyResponse {
         cache_trace_epochs: Vec::new(),
         positional_layouts: std::collections::BTreeMap::new(),
         tensor_aux_frames: false,
+        request_types: Vec::new(),
+        disaggregation_mode: None,
+        bootstrap_host: None,
+        bootstrap_port: None,
+        model_type: None,
+        architectures: Vec::new(),
+        mrope_positions: None,
+        spatial_merge_size: None,
+        image_token_id: None,
+        video_token_id: None,
     }
 }
 

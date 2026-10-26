@@ -7,6 +7,7 @@ use engine_zmq_client::{
     codec::tensor::{checked_numel, WireTensor},
     connector::TokenSpeedStream,
     protocol::{
+        handshake::EngineCoreReadyResponse,
         sglang::output::SglangOutput,
         tokenspeed::{
             multimodal::{
@@ -346,6 +347,34 @@ pub enum GridTensors {
 }
 
 impl GridTensors {
+    /// From the facts a TokenSpeed engine declares at its handshake (the same
+    /// facts a launcher hands the Rust servicer): the layout facts travel
+    /// together, so an engine that declares only some of them declares none,
+    /// and an engine that declares nothing keeps the conservative reading
+    /// ([`Self::Positions`]).
+    pub fn declared(ready: &EngineCoreReadyResponse) -> Self {
+        let layout = match (
+            ready.spatial_merge_size,
+            ready.image_token_id,
+            ready.video_token_id,
+        ) {
+            (Some(spatial_merge_size), Some(image_token_id), Some(video_token_id)) => {
+                Some(MropeLayout {
+                    spatial_merge_size,
+                    image_token_id,
+                    video_token_id,
+                })
+            }
+            _ => None,
+        };
+        Self::for_model(
+            &ready.architectures,
+            ready.model_type.as_deref().unwrap_or_default(),
+            ready.mrope_positions,
+            layout,
+        )
+    }
+
     /// From the launcher's model facts: the checkpoint's `architectures` and
     /// `model_type` (the engine's own dispatch picks the Qwen3.5 rule by
     /// them, [`qwen35_lineage`]), its `mrope_positions` reading of the text
@@ -2098,6 +2127,36 @@ mod tests {
             .iter()
             .map(|c| i64::from_le_bytes(*c))
             .collect()
+    }
+
+    /// The facts a TokenSpeed engine declares at its handshake pick the same
+    /// rule a launcher's facts do: a Qwen3.5 checkpoint with its layout gets
+    /// the position table, one that declares only part of the layout gets
+    /// none, and an engine that declares nothing keeps the conservative
+    /// reading.
+    #[test]
+    fn the_facts_an_engine_declares_pick_the_position_rule() {
+        let mut ready = default_ready_response();
+        assert_eq!(GridTensors::declared(&ready), GridTensors::Positions);
+        ready.model_type = Some("qwen3_5".to_string());
+        ready.architectures = vec!["Qwen3_5ForConditionalGeneration".to_string()];
+        ready.mrope_positions = Some(true);
+        ready.spatial_merge_size = Some(QWEN35.spatial_merge_size);
+        ready.image_token_id = Some(QWEN35.image_token_id);
+        assert_eq!(
+            GridTensors::declared(&ready),
+            GridTensors::Qwen35PositionsUnavailable
+        );
+        ready.video_token_id = Some(QWEN35.video_token_id);
+        assert_eq!(
+            GridTensors::declared(&ready),
+            GridTensors::Qwen35Positions(QWEN35)
+        );
+        // A model whose rope config is plain lays out patches only.
+        let mut patches = default_ready_response();
+        patches.architectures = vec!["Llama4ForConditionalGeneration".to_string()];
+        patches.mrope_positions = Some(false);
+        assert_eq!(GridTensors::declared(&patches), GridTensors::PatchLayout);
     }
 
     /// A Qwen3.5-lineage checkpoint's grid feeds the position table this

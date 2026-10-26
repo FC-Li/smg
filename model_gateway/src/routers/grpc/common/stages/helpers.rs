@@ -996,11 +996,12 @@ pub(crate) fn finish_generate_request(
     Ok(())
 }
 
-/// The prefill worker's bootstrap rendezvous `(host, port)`: the operator's
+/// A disaggregated worker's bootstrap rendezvous `(host, port)` (a prefill
+/// worker's KV, an encode worker's embeddings): the operator's
 /// (its URL's host, the port given with it) where set, else what its engine
 /// declared at the handshake (a direct-ZMQ worker's URL names the gateway's
 /// own bind, not the engine's host), else the default port.
-fn bootstrap_rendezvous<'a>(
+pub(crate) fn bootstrap_rendezvous<'a>(
     registered_host: &'a str,
     registered_port: Option<u16>,
     declared: Option<&'a (String, u16)>,

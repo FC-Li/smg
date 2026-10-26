@@ -394,8 +394,13 @@ impl ZmqEngineClient {
         };
         // Every wire bounds a prompt by the window the engine reported
         // (`crate::context_window`); an engine that reported none leaves
-        // prompts unbounded before it, said once here.
-        if client.context_window().is_ok_and(|window| window == 0) {
+        // prompts unbounded before it, said once here. An encode server runs
+        // no language model, takes no prompt and reports no window.
+        let takes_prompts = client
+            .engines()
+            .iter()
+            .any(|engine| engine.ready_response.takes_generate());
+        if takes_prompts && client.context_window().is_ok_and(|window| window == 0) {
             tracing::warn!(
                 "the engine reported no context window at the handshake (max_model_len 0): \
                  prompt lengths are not bounded before the engine"

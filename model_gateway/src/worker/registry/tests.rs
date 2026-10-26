@@ -1144,9 +1144,10 @@ fn routing_pools_filter_regular_workers_by_transport() {
         urls(RoutingPool::GrpcPipelineRegular),
         HashSet::from(["grpc://regular".to_string(), "zmq://regular".to_string()])
     );
-    // The PD pools hold gRPC workers and TokenSpeed's direct-ZMQ engines,
-    // whose wire carries the rendezvous: another runtime's ZMQ prefill worker
-    // that slipped past registration must not appear. Encode stays gRPC.
+    // The disaggregated pools hold gRPC workers and TokenSpeed's direct-ZMQ
+    // engines, whose wire carries the rendezvous and the encode request:
+    // another runtime's ZMQ prefill worker that slipped past registration
+    // must not appear.
     assert_eq!(
         urls(RoutingPool::GrpcPrefill),
         HashSet::from(["grpc://prefill".to_string(), "zmq://ts-prefill".to_string()])
@@ -1157,7 +1158,7 @@ fn routing_pools_filter_regular_workers_by_transport() {
     );
     assert_eq!(
         urls(RoutingPool::GrpcEncode),
-        HashSet::from(["grpc://encode".to_string()])
+        HashSet::from(["grpc://encode".to_string(), "zmq://ts-encode".to_string()])
     );
     // The HTTP PD pools are HTTP-only: the router proxies plain HTTP to
     // the selected URL, so gRPC and ZMQ workers must never be selectable.

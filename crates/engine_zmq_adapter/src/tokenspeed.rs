@@ -453,6 +453,7 @@ pub(crate) fn translate_request_tokenspeed_for(
         bootstrap_room,
         req.data_parallel_rank,
         ranks.len(),
+        ranks.is_decode(),
         &req.request_id,
     )? {
         Some(rank) => Some(ranks.index_of(rank).ok_or_else(|| {
@@ -620,11 +621,20 @@ impl LogprobColumns {
 /// one) is reached by its indices in order, which the headless launch
 /// numbers 0..n in rank order.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RankIndices(Vec<u32>);
+pub(crate) struct RankIndices {
+    indices: Vec<u32>,
+    /// Whether every rank declared itself a decode engine, which takes a
+    /// disaggregated request on the rank it is pinned to ([`rendezvous_rank`]).
+    decode: bool,
+}
 
 impl RankIndices {
     /// The ranks behind `engines`, each read at its handshake.
     pub(crate) fn of(engines: &[ConnectedEngine]) -> Self {
+        let decode = !engines.is_empty()
+            && engines
+                .iter()
+                .all(|engine| engine.ready_response.disaggregation_role() == Some("decode"));
         let mut declared: Vec<(u32, u32)> = engines
             .iter()
             .filter_map(|engine| {
@@ -641,47 +651,71 @@ impl RankIndices {
                 .enumerate()
                 .all(|(rank, (declared_rank, _))| u32::try_from(rank) == Ok(*declared_rank));
         if permutation {
-            return Self(declared.into_iter().map(|(_, index)| index).collect());
+            return Self {
+                indices: declared.into_iter().map(|(_, index)| index).collect(),
+                decode,
+            };
         }
         let mut indices: Vec<u32> = engines
             .iter()
             .filter_map(|engine| engine.engine_id.engine_index())
             .collect();
         indices.sort_unstable();
-        Self(indices)
+        Self { indices, decode }
     }
 
-    /// The indices in rank order, as given.
+    /// The indices in rank order, as given, of an engine that is not a
+    /// decode engine.
     #[cfg(test)]
     pub(crate) fn new(indices_by_rank: Vec<u32>) -> Self {
-        Self(indices_by_rank)
+        Self {
+            indices: indices_by_rank,
+            decode: false,
+        }
+    }
+
+    /// The indices in rank order, as given, of a decode engine.
+    #[cfg(test)]
+    pub(crate) fn decode(indices_by_rank: Vec<u32>) -> Self {
+        Self {
+            indices: indices_by_rank,
+            decode: true,
+        }
     }
 
     /// How many ranks there are: the engine's `dp_size` for the residue.
     pub(crate) fn len(&self) -> usize {
-        self.0.len()
+        self.indices.len()
+    }
+
+    /// Whether the ranks are a decode engine's.
+    pub(crate) fn is_decode(&self) -> bool {
+        self.decode
     }
 
     /// The engine index that is rank `rank`, `None` past the last rank.
     pub(crate) fn index_of(&self, rank: u32) -> Option<u32> {
-        self.0.get(usize::try_from(rank).ok()?).copied()
+        self.indices.get(usize::try_from(rank).ok()?).copied()
     }
 }
 
 /// The attention data-parallel rank a request goes to, the engine's own
 /// dispatch rule over `ranks` connected ranks (its data-parallel controller
-/// and input processor, which the direct wire bypasses): a disaggregated
-/// request (one with a `bootstrap_room`) goes to `room % ranks` on the
-/// prefill side as on the decode side, since the decode side's receiver
-/// locates the KV on the prefill group of that residue; a pin that disagrees
-/// is logged and ignored, never refused. Outside disaggregation an in-range
-/// pin is honoured and an out-of-range one refused as the engine refuses it.
-/// A single rank takes everything, pin or not, and `None` leaves an unpinned
-/// request to the least-loaded selection.
+/// and input processor, which the direct wire bypasses). A disaggregated
+/// request (one with a `bootstrap_room`) goes to `room % ranks` on a prefill
+/// engine, since the decode side's receiver locates the KV on the prefill
+/// rank of that residue: a pin that disagrees is logged and ignored, never
+/// refused. A `decode` engine finds the prefill rank from the room on any of
+/// its ranks, so it takes a disaggregated request on its pin, and on the
+/// room's residue without one. An in-range pin is otherwise honoured and an
+/// out-of-range one refused as the engine refuses it. A single rank takes
+/// everything, pin or not, and `None` leaves an unpinned aggregated request
+/// to the least-loaded selection.
 pub(crate) fn rendezvous_rank(
     bootstrap_room: Option<i64>,
     pin: Option<i32>,
     ranks: usize,
+    decode: bool,
     request_id: &str,
 ) -> Result<Option<u32>, String> {
     let Ok(ranks) = u32::try_from(ranks) else {
@@ -690,7 +724,16 @@ pub(crate) fn rendezvous_rank(
     if ranks <= 1 {
         return Ok(None);
     }
+    let pinned = |pin: i32| match u32::try_from(pin) {
+        Ok(rank) if rank < ranks => Ok(Some(rank)),
+        _ => Err(format!(
+            "data_parallel_rank must be in [0, {ranks}), got {pin}"
+        )),
+    };
     if let Some(room) = bootstrap_room {
+        if let (true, Some(pin)) = (decode, pin) {
+            return pinned(pin);
+        }
         let rank = u32::try_from(room.rem_euclid(i64::from(ranks))).unwrap_or(0);
         if let Some(pin) = pin {
             if u32::try_from(pin).ok() != Some(rank) {
@@ -700,7 +743,7 @@ pub(crate) fn rendezvous_rank(
                     bootstrap_room = room,
                     dp_size = ranks,
                     "data_parallel_rank conflicts with the bootstrap_room residue; the room \
-                     stays authoritative on a disaggregated request, the pin is ignored"
+                     stays authoritative on a prefill engine, the pin is ignored"
                 );
             }
         }
@@ -708,12 +751,7 @@ pub(crate) fn rendezvous_rank(
     }
     match pin {
         None => Ok(None),
-        Some(pin) => match u32::try_from(pin) {
-            Ok(rank) if rank < ranks => Ok(Some(rank)),
-            _ => Err(format!(
-                "data_parallel_rank must be in [0, {ranks}), got {pin}"
-            )),
-        },
+        Some(pin) => pinned(pin),
     }
 }
 
@@ -1578,37 +1616,66 @@ mod tests {
     }
 
     /// Placement is the engine's own dispatch rule: a disaggregated request
-    /// goes to its room's residue on either side (a disagreeing pin is
-    /// ignored), an aggregated one to its pin when in range (out of range is
-    /// the engine's refusal), a single rank takes everything, and an
-    /// unpinned aggregated request is left to the least-loaded selection.
+    /// goes to its room's residue on a prefill engine (a disagreeing pin is
+    /// ignored) and to its pin on a decode engine, an aggregated one to its
+    /// pin when in range (out of range is the engine's refusal), a single
+    /// rank takes everything, and an unpinned aggregated request is left to
+    /// the least-loaded selection.
     #[test]
     fn tokenspeed_places_a_request_as_the_engines_dispatcher_would() {
-        assert_eq!(rendezvous_rank(Some(7), None, 2, "r").unwrap(), Some(1));
-        assert_eq!(rendezvous_rank(Some(8), None, 2, "r").unwrap(), Some(0));
         assert_eq!(
-            rendezvous_rank(Some(7), Some(0), 2, "r").unwrap(),
+            rendezvous_rank(Some(7), None, 2, false, "r").unwrap(),
+            Some(1)
+        );
+        assert_eq!(
+            rendezvous_rank(Some(8), None, 2, false, "r").unwrap(),
+            Some(0)
+        );
+        assert_eq!(
+            rendezvous_rank(Some(7), Some(0), 2, false, "r").unwrap(),
             Some(1),
             "the room stays authoritative over the pin"
         );
         assert_eq!(
-            rendezvous_rank(Some(-3), None, 4, "r").unwrap(),
+            rendezvous_rank(Some(-3), None, 4, false, "r").unwrap(),
             Some(1),
             "a negative room folds as Python's % does"
         );
-        assert_eq!(rendezvous_rank(Some(7), Some(1), 1, "r").unwrap(), None);
-        assert_eq!(rendezvous_rank(None, Some(1), 2, "r").unwrap(), Some(1));
-        assert_eq!(rendezvous_rank(None, None, 2, "r").unwrap(), None);
         assert_eq!(
-            rendezvous_rank(None, Some(5), 1, "r").unwrap(),
+            rendezvous_rank(Some(7), Some(1), 1, false, "r").unwrap(),
+            None
+        );
+        assert_eq!(
+            rendezvous_rank(None, Some(1), 2, false, "r").unwrap(),
+            Some(1)
+        );
+        assert_eq!(rendezvous_rank(None, None, 2, false, "r").unwrap(), None);
+        assert_eq!(
+            rendezvous_rank(None, Some(5), 1, false, "r").unwrap(),
             None,
             "without attention DP the pin is meaningless and dropped"
         );
         assert_eq!(
-            rendezvous_rank(None, Some(2), 2, "r").unwrap_err(),
+            rendezvous_rank(None, Some(2), 2, false, "r").unwrap_err(),
             "data_parallel_rank must be in [0, 2), got 2"
         );
-        assert!(rendezvous_rank(None, Some(-1), 2, "r").is_err());
+        assert!(rendezvous_rank(None, Some(-1), 2, false, "r").is_err());
+
+        // A decode engine takes a disaggregated request on its pin (any of
+        // its ranks finds the prefill rank from the room), on the room's
+        // residue without one, and refuses an out-of-range pin.
+        assert_eq!(
+            rendezvous_rank(Some(7), Some(0), 2, true, "r").unwrap(),
+            Some(0)
+        );
+        assert_eq!(
+            rendezvous_rank(Some(7), None, 2, true, "r").unwrap(),
+            Some(1)
+        );
+        assert_eq!(
+            rendezvous_rank(Some(7), Some(2), 2, true, "r").unwrap_err(),
+            "data_parallel_rank must be in [0, 2), got 2"
+        );
 
         // Through the translation, over two ranks whose engine indices are
         // the reverse of their ranks (rank 0 dialled in as index 1): the
@@ -1641,6 +1708,22 @@ mod tests {
             wire.data_parallel_rank,
             Some(1),
             "room 4 is rank 0 on two ranks, which is index 1"
+        );
+        let mut req = ts_tokenized_req(tokenspeed_proto::SamplingParams::default());
+        req.data_parallel_rank = Some(1);
+        req.kv_bootstrap_info = Some(kv_bootstrap("10.0.0.7", 8998, 4));
+        let wire = translate_request_tokenspeed_for(
+            req,
+            GridTensors::Positions,
+            window,
+            &RankIndices::decode(vec![1, 0]),
+            LogprobColumns::default(),
+        )
+        .expect("a pinned decode request");
+        assert_eq!(
+            wire.data_parallel_rank,
+            Some(0),
+            "a decode engine takes rank 1, which is index 0, whatever the room"
         );
         let mut req = ts_tokenized_req(tokenspeed_proto::SamplingParams::default());
         req.data_parallel_rank = Some(2);
@@ -1696,6 +1779,20 @@ mod tests {
             "declared ranks over arbitrary indices"
         );
         assert_eq!(RankIndices::of(&[]).len(), 0);
+        assert!(!swapped.is_decode());
+
+        // A group whose every rank declares the decode role is a decode
+        // engine's.
+        let decode = |index: u32| ConnectedEngine {
+            engine_id: EngineId::from_engine_index(index),
+            ready_response: EngineCoreReadyResponse {
+                data_parallel_rank: index,
+                disaggregation_mode: Some("decode".to_string()),
+                ..default_ready_response()
+            },
+        };
+        assert!(RankIndices::of(&[decode(0), decode(1)]).is_decode());
+        assert!(!RankIndices::of(&[decode(0), engine(1, 1)]).is_decode());
     }
 
     /// An EPD prefill request: each named item carries its encode rendezvous

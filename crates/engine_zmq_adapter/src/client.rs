@@ -1168,6 +1168,14 @@ impl ZmqEngineClient {
         Ok(streams)
     }
 
+    /// Whether the engine's wire carries control calls (the cache flush and
+    /// the profiler): an SGLang scheduler's always does, a TokenSpeed one's
+    /// when every rank declared the control reply, a vLLM engine's never.
+    pub fn carries_control_calls(&self) -> bool {
+        matches!(&self.backend, ZmqBackend::Sglang(_))
+            || self.tokenspeed_wire_carries_control_calls()
+    }
+
     /// Whether every connected TokenSpeed rank declared the control reply at
     /// its handshake (the control-wire revision), so the scheduler's control
     /// RPCs can be carried to it; false on a scheduler that declares none and

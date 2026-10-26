@@ -54,9 +54,7 @@ use crate::{
         error::internal_error,
         grpc::regular::symphony::{template::Templates, PreparedConstraint},
     },
-    worker::{
-        PrefillLoadGuard, RuntimeType, Worker, WorkerLoadGuard, WorkerRegistry,
-    },
+    worker::{PrefillLoadGuard, RuntimeType, Worker, WorkerLoadGuard, WorkerRegistry},
     workflow::TokenizerLoadFailures,
 };
 

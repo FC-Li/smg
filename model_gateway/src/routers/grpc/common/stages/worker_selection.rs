@@ -2735,7 +2735,10 @@ mod tests {
         port: u16,
     ) -> (String, String) {
         let url = |port: u16| format!("ipc:///tmp/smg-zmq/{port}.ipc");
-        for (port, worker_type) in [(port, WorkerType::Prefill), (port + 100, WorkerType::Decode)] {
+        for (port, worker_type) in [
+            (port, WorkerType::Prefill),
+            (port + 100, WorkerType::Decode),
+        ] {
             registry
                 .register(Arc::new(
                     BasicWorkerBuilder::new(url(port))

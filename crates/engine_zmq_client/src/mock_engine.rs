@@ -419,7 +419,9 @@ impl MockEngineHandshake {
             init,
         } = self;
         handshake
-            .send(ZmqMessage::from(encode_msgpack(&ready_message("READY", None))?))
+            .send(ZmqMessage::from(encode_msgpack(&ready_message(
+                "READY", None,
+            ))?))
             .await?;
         Self::register(identity, init, ready_response).await
     }

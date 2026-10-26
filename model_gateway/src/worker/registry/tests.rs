@@ -1100,19 +1100,84 @@ fn routing_pools_filter_regular_workers_by_transport() {
     let registry = WorkerRegistry::new();
     let (sglang, tokenspeed) = (RuntimeType::Sglang, RuntimeType::TokenSpeed);
     let workers = [
-        ("http://regular", WorkerType::Regular, ConnectionMode::Http, sglang),
-        ("grpc://regular", WorkerType::Regular, ConnectionMode::Grpc, sglang),
-        ("zmq://regular", WorkerType::Regular, ConnectionMode::Zmq, sglang),
-        ("http://prefill", WorkerType::Prefill, ConnectionMode::Http, sglang),
-        ("grpc://prefill", WorkerType::Prefill, ConnectionMode::Grpc, sglang),
-        ("zmq://prefill", WorkerType::Prefill, ConnectionMode::Zmq, sglang),
-        ("zmq://ts-prefill", WorkerType::Prefill, ConnectionMode::Zmq, tokenspeed),
-        ("http://decode", WorkerType::Decode, ConnectionMode::Http, sglang),
-        ("grpc://decode", WorkerType::Decode, ConnectionMode::Grpc, sglang),
-        ("zmq://ts-decode", WorkerType::Decode, ConnectionMode::Zmq, tokenspeed),
-        ("grpc://encode", WorkerType::Encode, ConnectionMode::Grpc, sglang),
-        ("http://encode", WorkerType::Encode, ConnectionMode::Http, sglang),
-        ("zmq://ts-encode", WorkerType::Encode, ConnectionMode::Zmq, tokenspeed),
+        (
+            "http://regular",
+            WorkerType::Regular,
+            ConnectionMode::Http,
+            sglang,
+        ),
+        (
+            "grpc://regular",
+            WorkerType::Regular,
+            ConnectionMode::Grpc,
+            sglang,
+        ),
+        (
+            "zmq://regular",
+            WorkerType::Regular,
+            ConnectionMode::Zmq,
+            sglang,
+        ),
+        (
+            "http://prefill",
+            WorkerType::Prefill,
+            ConnectionMode::Http,
+            sglang,
+        ),
+        (
+            "grpc://prefill",
+            WorkerType::Prefill,
+            ConnectionMode::Grpc,
+            sglang,
+        ),
+        (
+            "zmq://prefill",
+            WorkerType::Prefill,
+            ConnectionMode::Zmq,
+            sglang,
+        ),
+        (
+            "zmq://ts-prefill",
+            WorkerType::Prefill,
+            ConnectionMode::Zmq,
+            tokenspeed,
+        ),
+        (
+            "http://decode",
+            WorkerType::Decode,
+            ConnectionMode::Http,
+            sglang,
+        ),
+        (
+            "grpc://decode",
+            WorkerType::Decode,
+            ConnectionMode::Grpc,
+            sglang,
+        ),
+        (
+            "zmq://ts-decode",
+            WorkerType::Decode,
+            ConnectionMode::Zmq,
+            tokenspeed,
+        ),
+        (
+            "grpc://encode",
+            WorkerType::Encode,
+            ConnectionMode::Grpc,
+            sglang,
+        ),
+        (
+            "http://encode",
+            WorkerType::Encode,
+            ConnectionMode::Http,
+            sglang,
+        ),
+        (
+            "zmq://ts-encode",
+            WorkerType::Encode,
+            ConnectionMode::Zmq,
+            tokenspeed,
+        ),
     ];
     for (url, worker_type, connection_mode, runtime_type) in workers {
         registry

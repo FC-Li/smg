@@ -439,7 +439,12 @@ mod tests {
             let err = zmq_socket_addresses(url, Handshake::Derived).unwrap_err();
             assert!(err.contains("wildcard"), "{err}");
         }
-        for url in ["tcp://10.0.0.5", "tcp://10.0.0.5:0", "tcp://:31000", "tcp://10.0.0.5:x"] {
+        for url in [
+            "tcp://10.0.0.5",
+            "tcp://10.0.0.5:0",
+            "tcp://:31000",
+            "tcp://10.0.0.5:x",
+        ] {
             let err = zmq_socket_addresses(url, Handshake::Derived).unwrap_err();
             assert!(err.contains("tcp://<host>:<port>"), "{url}: {err}");
         }

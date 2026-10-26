@@ -951,7 +951,8 @@ impl ZmqEngineClient {
         }
         let max_model_len = self.prompt_bound()?;
         // The ranks as the engine numbers them: a disaggregated request is
-        // placed by its room's residue, a pinned one by its pin.
+        // placed on a prefill engine by its room's residue, a pinned one
+        // elsewhere by its pin.
         let ranks = RankIndices::of(client.engines());
         let logprobs = LogprobColumns::of(client.engines());
         // Sub-streams submitted before a mid-loop failure are dropped with the

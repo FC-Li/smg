@@ -292,12 +292,17 @@ async fn within<T>(step: &'static str, future: impl std::future::Future<Output =
 }
 
 async fn wait_for_endpoint(endpoint: &str) -> Result<()> {
-    let Some(socket_path) = endpoint.strip_prefix("ipc://") else {
-        return Ok(());
-    };
+    // A dial to an endpoint nothing listens on yet fails at once, so wait
+    // for the frontend's bind: its socket file, or its TCP port.
     timeout(CONNECT_TIMEOUT, async {
-        while tokio::net::UnixStream::connect(socket_path).await.is_err() {
-            sleep(Duration::from_millis(20)).await;
+        if let Some(socket_path) = endpoint.strip_prefix("ipc://") {
+            while tokio::net::UnixStream::connect(socket_path).await.is_err() {
+                sleep(Duration::from_millis(20)).await;
+            }
+        } else if let Some(address) = endpoint.strip_prefix("tcp://") {
+            while tokio::net::TcpStream::connect(address).await.is_err() {
+                sleep(Duration::from_millis(20)).await;
+            }
         }
     })
     .await

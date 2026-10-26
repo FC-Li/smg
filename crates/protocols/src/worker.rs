@@ -84,8 +84,9 @@ pub enum ConnectionMode {
     Http,
     /// gRPC connection.
     Grpc,
-    /// Direct ZMQ connection to a same-host engine core (bypasses the gRPC
-    /// Python servicer). Speaks the engine's native ZMQ IPC.
+    /// Direct ZMQ connection to an engine core (bypasses the gRPC Python
+    /// servicer). Speaks the engine's native ZMQ wire: over `ipc://` sockets
+    /// to a same-host engine, over `tcp://` to engines on other hosts.
     Zmq,
 }
 
@@ -95,7 +96,7 @@ impl ConnectionMode {
     /// scheme) or an unrecognized scheme, leaving the default to the caller
     /// (some probe both protocols; some default to HTTP).
     pub fn from_url(url: &str) -> Option<Self> {
-        if url.starts_with("ipc://") {
+        if url.starts_with("ipc://") || url.starts_with("tcp://") {
             Some(ConnectionMode::Zmq)
         } else if url.starts_with("grpc://") || url.starts_with("grpcs://") {
             Some(ConnectionMode::Grpc)
@@ -1733,6 +1734,10 @@ mod connection_mode_tests {
     fn from_url_classifies_known_schemes() {
         assert_eq!(
             ConnectionMode::from_url("ipc:///tmp/e"),
+            Some(ConnectionMode::Zmq)
+        );
+        assert_eq!(
+            ConnectionMode::from_url("tcp://10.0.0.5:31000"),
             Some(ConnectionMode::Zmq)
         );
         assert_eq!(

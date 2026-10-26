@@ -139,16 +139,29 @@ fn require_backend_client(
     })
 }
 
-/// EngineCore exposes no admin RPCs over ZMQ, so these ops can never succeed for
-/// a ZMQ worker. Reject them up front rather than dispatching to client
-/// acquisition, which would otherwise drive the lazy handshake (as long as a
-/// model load) only to return `unimplemented`.
+/// A ZMQ engine whose wire carries no control calls (vLLM's EngineCore, a
+/// TokenSpeed scheduler that declares none) has no admin RPC: refused before
+/// anything is sent.
 fn zmq_admin_unsupported(url: &str, operation: &str) -> WorkerError {
     WorkerError::OperationFailed {
         url: url.to_string(),
         operation: operation.to_string(),
-        reason: format!("{operation} is not supported over ZMQ"),
+        reason: format!("{operation} is not supported over this engine's ZMQ wire"),
     }
+}
+
+/// The worker's backend client for an admin op, refused when the backend
+/// answers none ([`zmq_admin_unsupported`]).
+fn admin_backend_client(
+    url: &str,
+    operation: &str,
+    client: Option<Arc<BackendClient>>,
+) -> WorkerResult<Arc<BackendClient>> {
+    let client = require_backend_client(url, operation, client)?;
+    if !client.carries_admin_calls() {
+        return Err(zmq_admin_unsupported(url, operation));
+    }
+    Ok(client)
 }
 
 /// Map a gRPC admin-op outcome (`success` flag plus message) to a
@@ -1055,9 +1068,8 @@ pub trait Worker: Send + Sync + fmt::Debug + 'static {
                 )
                 .await
             }
-            ConnectionMode::Zmq => Err(zmq_admin_unsupported(self.url(), "flush_cache")),
-            ConnectionMode::Grpc => {
-                let client = require_backend_client(
+            ConnectionMode::Grpc | ConnectionMode::Zmq => {
+                let client = admin_backend_client(
                     self.url(),
                     "flush_cache",
                     self.get_backend_client().await?,
@@ -1092,9 +1104,8 @@ pub trait Worker: Send + Sync + fmt::Debug + 'static {
                 )
                 .await
             }
-            ConnectionMode::Zmq => Err(zmq_admin_unsupported(self.url(), "start_profile")),
-            ConnectionMode::Grpc => {
-                let client = require_backend_client(
+            ConnectionMode::Grpc | ConnectionMode::Zmq => {
+                let client = admin_backend_client(
                     self.url(),
                     "start_profile",
                     self.get_backend_client().await?,
@@ -1133,9 +1144,8 @@ pub trait Worker: Send + Sync + fmt::Debug + 'static {
                 )
                 .await
             }
-            ConnectionMode::Zmq => Err(zmq_admin_unsupported(self.url(), "stop_profile")),
-            ConnectionMode::Grpc => {
-                let client = require_backend_client(
+            ConnectionMode::Grpc | ConnectionMode::Zmq => {
+                let client = admin_backend_client(
                     self.url(),
                     "stop_profile",
                     self.get_backend_client().await?,

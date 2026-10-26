@@ -1353,10 +1353,12 @@ pub struct FlushCacheResult {
     pub failed: Vec<(String, String)>,
     pub total_workers: usize,
     pub http_workers: usize,
+    /// gRPC workers, and direct-ZMQ engines whose wire carries the flush.
     #[serde(default)]
     pub grpc_workers: usize,
     /// Workers skipped because their transport has no cache-flush RPC
-    /// (direct-ZMQ engines). Keeps `total = http + grpc + zmq` exact.
+    /// (direct-ZMQ engines whose wire carries no control calls). Keeps
+    /// `total = http + grpc + zmq` exact.
     #[serde(default)]
     pub zmq_workers: usize,
     pub message: String,

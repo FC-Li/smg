@@ -945,6 +945,7 @@ fn normalize_url(url: &str, connection_mode: ConnectionMode) -> String {
         || url.starts_with("grpc://")
         || url.starts_with("grpcs://")
         || url.starts_with("ipc://")
+        || url.starts_with("tcp://")
     {
         url.to_string()
     } else {

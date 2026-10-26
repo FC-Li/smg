@@ -161,8 +161,9 @@ pub(crate) struct ZmqConnectionMeta {
 }
 
 /// Bind the SMG-side ZMQ sockets and complete the handshake with the
-/// engine(s): the single connect path for a worker's `ipc://` URL, driven only
-/// by the worker's background handshake driver. `model_id` is
+/// engine(s): the single connect path for a worker's `ipc://` or `tcp://` URL
+/// (see `zmq_socket_addresses`), driven only by the worker's background
+/// handshake driver. `model_id` is
 /// the config-resolved served model (EngineCore reports none). `engine_count`
 /// is the number of DP engines that will dial this worker's sockets (1 for an
 /// ungrouped worker), or [`EngineCount::Declared`] for as many as the engines
@@ -309,8 +310,9 @@ impl ZmqEngineClient {
     /// Bind the frontend sockets and complete the handshake with the engine(s),
     /// which must already be running and dialing `handshake_address`.
     ///
-    /// `input_address`/`output_address` are the `ipc://` data-plane endpoints the
-    /// engines connect to (chosen by SMG). `engine_count` is the number of DP
+    /// `input_address`/`output_address` are the data-plane endpoints SMG binds
+    /// and the engines connect to (`ipc://` for a same-host engine, `tcp://`
+    /// for engines on other hosts). `engine_count` is the number of DP
     /// ranks to await ([`EngineCount`]; a plain count is exact). `runtime` selects the wire protocol spoken over the shared
     /// transport (vLLM EngineCore vs TokenSpeed). `startup` bounds the
     /// handshake (see [`StartupBudget`]; a plain [`Duration`] is a per-message
@@ -1878,6 +1880,50 @@ mod tests {
         let client = client.expect("the retry connects the engine");
         engine.expect("mock engine connected");
         assert_eq!(client.dialect(), ZmqDialect::Vllm);
+    }
+
+    /// A `tcp://` worker serves engines on other hosts: they dial its own
+    /// address, and the INIT hands them data-plane addresses on the same
+    /// host with the ports the gateway bound.
+    #[tokio::test]
+    async fn a_tcp_worker_connects_its_engines_through_its_own_address() {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let base_url = format!("tcp://127.0.0.1:{port}");
+        let (client, engine) = tokio::join!(
+            connect_with_eos(
+                &base_url,
+                "m".to_string(),
+                RuntimeType::TokenSpeed,
+                Handshake::Derived,
+                1,
+                EosTokenIds::default(),
+                Duration::from_secs(10),
+            ),
+            connect_to_frontend(
+                &base_url,
+                EngineId::from_engine_index(0),
+                default_ready_response()
+            ),
+        );
+        let client = client.expect("the tcp worker connects");
+        let engine = engine.expect("mock engine connected");
+        assert_eq!(client.engine_count(), 1);
+        for address in engine
+            .init
+            .addresses
+            .inputs
+            .iter()
+            .chain(&engine.init.addresses.outputs)
+        {
+            let bound = address
+                .strip_prefix("tcp://127.0.0.1:")
+                .unwrap_or_else(|| panic!("a data-plane address on the worker's host: {address}"));
+            assert_ne!(bound.parse::<u16>().unwrap(), 0, "{address}");
+        }
     }
 
     /// The gateway's own connection (nothing configures the backend, as

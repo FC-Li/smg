@@ -130,7 +130,7 @@ fn tcp_socket_addresses(
              separate handshake address"
         ));
     }
-    let (host, port) = authority
+    let (host, _port) = authority
         .rsplit_once(':')
         .filter(|(host, port)| !host.is_empty() && port.parse::<u16>().is_ok_and(|p| p != 0))
         .ok_or_else(|| format!("ZMQ worker URL must be tcp://<host>:<port>, got '{base_url}'"))?;

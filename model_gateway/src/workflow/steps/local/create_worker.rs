@@ -959,13 +959,13 @@ fn normalize_url(url: &str, connection_mode: ConnectionMode) -> String {
 
 /// Reject a disaggregated worker the ZMQ path cannot serve.
 ///
-/// TokenSpeed's generate request carries the prefill/decode rendezvous (its
-/// bootstrap slots), so a TokenSpeed ZMQ worker serves prefill and decode.
-/// vLLM's `EngineCoreRequest` has no field for the bootstrap info PD injects,
-/// so for the other runtimes `Regular` is the only role the ZMQ lane serves.
-/// Encode dispatch is a gRPC encoder RPC no direct-ZMQ worker has a path for.
-/// A worker of a role its lane cannot serve is rejected at registration
-/// rather than registered and never selected.
+/// TokenSpeed's wire carries the prefill/decode rendezvous on its generate
+/// request (the bootstrap slots) and takes an encode server's encode request,
+/// so a TokenSpeed ZMQ worker serves every role. vLLM's `EngineCoreRequest`
+/// has no field for the bootstrap info PD injects, and the other runtimes'
+/// encode dispatch is a gRPC encoder RPC, so for them `Regular` is the only
+/// role the ZMQ lane serves. A worker of a role its lane cannot serve is
+/// rejected at registration rather than registered and never selected.
 fn validate_zmq_worker_type(
     connection_mode: ConnectionMode,
     runtime_type: RuntimeType,
@@ -977,16 +977,15 @@ fn validate_zmq_worker_type(
     }
     let reason = match worker_type {
         WorkerType::Regular => return Ok(()),
-        WorkerType::Prefill | WorkerType::Decode if runtime_type == RuntimeType::TokenSpeed => {
-            return Ok(())
-        }
+        _ if runtime_type == RuntimeType::TokenSpeed => return Ok(()),
         WorkerType::Prefill | WorkerType::Decode => format!(
             "the {runtime_type} direct-ZMQ backend carries no KV-transfer metadata, so \
              prefill/decode disaggregation requires a gRPC worker or a TokenSpeed engine"
         ),
-        WorkerType::Encode => "the direct-ZMQ backend has no encode path, so encode \
-             disaggregation requires a gRPC worker"
-            .to_string(),
+        WorkerType::Encode => format!(
+            "the {runtime_type} direct-ZMQ backend has no encode path, so encode \
+             disaggregation requires a gRPC worker or a TokenSpeed encode server"
+        ),
     };
     Err(WorkflowError::StepFailed {
         step_id: StepId::new("create_worker"),
@@ -2221,7 +2220,6 @@ mod tests {
             (RuntimeType::Sglang, WorkerType::Prefill),
             (RuntimeType::Sglang, WorkerType::Decode),
             (RuntimeType::Sglang, WorkerType::Encode),
-            (RuntimeType::TokenSpeed, WorkerType::Encode),
         ];
         for (runtime, worker_type) in refused {
             let err = validate_zmq_worker_type(
@@ -2244,8 +2242,9 @@ mod tests {
         }
 
         // Every runtime's ZMQ lane serves Regular; a TokenSpeed engine, whose
-        // generate request carries the rendezvous, serves prefill and decode
-        // too; every worker type over the other transports stays accepted.
+        // generate request carries the rendezvous and whose encode server takes
+        // the encode request, serves every role; every worker type over the
+        // other transports stays accepted.
         for runtime in [RuntimeType::Vllm, RuntimeType::TokenSpeed] {
             validate_zmq_worker_type(
                 ConnectionMode::Zmq,
@@ -2255,14 +2254,14 @@ mod tests {
             )
             .expect("ZMQ regular workers are the supported case");
         }
-        for worker_type in [WorkerType::Prefill, WorkerType::Decode] {
+        for worker_type in [WorkerType::Prefill, WorkerType::Decode, WorkerType::Encode] {
             validate_zmq_worker_type(
                 ConnectionMode::Zmq,
                 RuntimeType::TokenSpeed,
                 worker_type,
                 "ipc:///tmp/smg-zmq/ts0.ipc",
             )
-            .expect("a TokenSpeed ZMQ worker serves prefill and decode");
+            .expect("a TokenSpeed ZMQ worker serves every role");
         }
         for mode in [ConnectionMode::Http, ConnectionMode::Grpc] {
             for worker_type in [WorkerType::Prefill, WorkerType::Decode, WorkerType::Encode] {

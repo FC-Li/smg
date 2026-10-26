@@ -261,12 +261,13 @@ impl MockEngine {
     }
 }
 
-fn ready_message(status: &str) -> ReadyMessage {
+fn ready_message(status: &str, engine_count: Option<usize>) -> ReadyMessage {
     ReadyMessage {
         status: Some(status.to_string()),
         local: Some(true),
         headless: Some(true),
         parallel_config_hash: None,
+        engine_count,
     }
 }
 
@@ -321,6 +322,16 @@ pub async fn hello(
     handshake_address: &str,
     engine_id: impl Into<EngineId>,
 ) -> Result<MockEngineHandshake> {
+    hello_in_group(handshake_address, engine_id, None).await
+}
+
+/// [`hello`] from an engine whose HELLO declares the size of the group it
+/// dials with (`engine_count`, none when `None`).
+pub async fn hello_in_group(
+    handshake_address: &str,
+    engine_id: impl Into<EngineId>,
+    engine_count: Option<usize>,
+) -> Result<MockEngineHandshake> {
     let engine_id = engine_id.into();
     let identity = peer_identity(&engine_id)?;
 
@@ -335,7 +346,10 @@ pub async fn hello(
     .await??;
 
     handshake
-        .send(ZmqMessage::from(encode_msgpack(&ready_message("HELLO"))?))
+        .send(ZmqMessage::from(encode_msgpack(&ready_message(
+            "HELLO",
+            engine_count,
+        ))?))
         .await?;
     let init_frames = within("mock engine: INIT from the servicer", handshake.recv())
         .await??
@@ -400,7 +414,7 @@ impl MockEngineHandshake {
             init,
         } = self;
         handshake
-            .send(ZmqMessage::from(encode_msgpack(&ready_message("READY"))?))
+            .send(ZmqMessage::from(encode_msgpack(&ready_message("READY", None))?))
             .await?;
         Self::register(identity, init, ready_response).await
     }

@@ -25,6 +25,11 @@ pub struct ReadyMessage {
     pub headless: Option<bool>,
     #[serde(default)]
     pub parallel_config_hash: Option<String>,
+    /// How many engines dial this frontend as one group, as the engine
+    /// declares it (a TokenSpeed attention-DP group says its size); `None`
+    /// from an engine that declares none.
+    #[serde(default)]
+    pub engine_count: Option<usize>,
 }
 
 /// KV-event publisher configuration reported by EngineCore.
@@ -247,12 +252,14 @@ mod tests {
             local: Some(true),
             headless: Some(false),
             parallel_config_hash: None,
+            engine_count: Some(2),
         };
         let bytes = encode_msgpack(&msg).unwrap();
         let decoded: ReadyMessage = decode_msgpack(&bytes).unwrap();
         assert_eq!(decoded.status.as_deref(), Some("HELLO"));
         assert_eq!(decoded.local, Some(true));
         assert_eq!(decoded.headless, Some(false));
+        assert_eq!(decoded.engine_count, Some(2));
     }
 
     #[test]

@@ -45,6 +45,7 @@ pub use client::{
     ZmqEngineClient, ZmqModelInfo, ZmqServerInfo,
 };
 pub use embed::translate_embed_request;
+pub use engine_zmq_client::EngineCount;
 pub use engine_zmq_client::protocol::vllm::{
     pooling::{PoolerDefaults, PoolingParams},
     structured_outputs::StructuredOutputBackend,

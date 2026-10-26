@@ -64,7 +64,7 @@ async fn connect_zmq_backend(
     runtime: RuntimeType,
     worker_type: WorkerType,
     handshake_override: Option<String>,
-    engine_count: usize,
+    engine_count: zmq_client::EngineCount,
     startup: Duration,
     request_timeout: Option<Duration>,
 ) -> WorkerResult<Arc<BackendClient>> {
@@ -1396,7 +1396,10 @@ impl BasicWorker {
         let runtime = self.metadata.spec.runtime_type;
         let worker_type = self.metadata.spec.worker_type;
         let handshake_override = self.metadata.spec.zmq_handshake_address.clone();
-        let engine_count = self.metadata.zmq_engine_count();
+        let engine_count = self
+            .metadata
+            .zmq_engine_count()
+            .map_or(zmq_client::EngineCount::Declared, zmq_client::EngineCount::Exactly);
         let startup = self.metadata.zmq_startup_timeout;
         let request_timeout = self.metadata.zmq_request_timeout;
         // Capture the readiness signal and the revision at hand-off. The

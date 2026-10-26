@@ -22,7 +22,7 @@ use engine_zmq_client::{
         vllm::{request::EngineCoreRequest, sampling::EngineCoreSamplingParams, VllmProtocol},
         EngineLoad, EngineProtocol,
     },
-    ConnectedEngine, StartupBudget,
+    ConnectedEngine, EngineCount, StartupBudget,
 };
 use futures::StreamExt;
 use llm_tokenizer::traits::Tokenizer;
@@ -165,7 +165,8 @@ pub(crate) struct ZmqConnectionMeta {
 /// by the worker's background handshake driver. `model_id` is
 /// the config-resolved served model (EngineCore reports none). `engine_count`
 /// is the number of DP engines that will dial this worker's sockets (1 for an
-/// ungrouped worker). `startup` is the longest any one stage of the handshake
+/// ungrouped worker), or [`EngineCount::Declared`] for as many as the engines
+/// declare. `startup` is the longest any one stage of the handshake
 /// (an engine's HELLO, its READY, its registration on the input socket) may
 /// stay silent: the gateway did not launch the engine and sees no sign of
 /// life from it beside the wire, so this bound alone must cover the engine's
@@ -180,7 +181,7 @@ pub async fn connect_for_worker(
     model_id: String,
     runtime: RuntimeType,
     handshake_override: Option<&str>,
-    engine_count: usize,
+    engine_count: impl Into<EngineCount>,
     startup: Duration,
     request_timeout: Option<Duration>,
 ) -> Result<ZmqEngineClient, String> {
@@ -244,10 +245,11 @@ pub async fn connect_with_eos(
     model_id: String,
     runtime: RuntimeType,
     handshake: Handshake<'_>,
-    engine_count: usize,
+    engine_count: impl Into<EngineCount>,
     eos: EosTokenIds,
     startup: impl Into<StartupBudget>,
 ) -> Result<ZmqEngineClient, String> {
+    let engine_count = engine_count.into();
     let (handshake, input, output) = zmq_socket_addresses(base_url, handshake)?;
     ensure_ipc_socket_dir(base_url).await?;
     // ZMQ refuses to bind over an existing ipc socket file, so leftovers from
@@ -261,7 +263,7 @@ pub async fn connect_with_eos(
         unlink_stale_socket(&output).await?;
     }
     tracing::info!(
-        "Binding ZMQ client for worker {base_url} (handshake={handshake}, engines={engine_count})"
+        "Binding ZMQ client for worker {base_url} (handshake={handshake}, engines={engine_count:?})"
     );
     ZmqEngineClient::connect(
         &handshake,
@@ -309,7 +311,7 @@ impl ZmqEngineClient {
     ///
     /// `input_address`/`output_address` are the `ipc://` data-plane endpoints the
     /// engines connect to (chosen by SMG). `engine_count` is the number of DP
-    /// ranks to await. `runtime` selects the wire protocol spoken over the shared
+    /// ranks to await ([`EngineCount`]; a plain count is exact). `runtime` selects the wire protocol spoken over the shared
     /// transport (vLLM EngineCore vs TokenSpeed). `startup` bounds the
     /// handshake (see [`StartupBudget`]; a plain [`Duration`] is a per-message
     /// timeout).
@@ -321,7 +323,7 @@ impl ZmqEngineClient {
         handshake_address: &str,
         input_address: &str,
         output_address: &str,
-        engine_count: usize,
+        engine_count: impl Into<EngineCount>,
         model_id: String,
         eos: EosTokenIds,
         runtime: RuntimeType,

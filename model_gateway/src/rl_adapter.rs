@@ -168,7 +168,9 @@ impl RlControlCalls for EngineConnectionControl {
             .get_backend_client()
             .await
             .map_err(|e| CallFailure::Failed(format!("the engine is not connected: {e}")))?
-            .ok_or_else(|| CallFailure::Failed("the worker has no engine connection".to_string()))?;
+            .ok_or_else(|| {
+                CallFailure::Failed("the worker has no engine connection".to_string())
+            })?;
         let BackendClient::Zmq(client) = client.as_ref() else {
             return Err(CallFailure::Failed(
                 "the worker is not a direct-ZMQ worker".to_string(),

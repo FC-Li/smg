@@ -268,7 +268,11 @@ pub async fn connect_handshake(
                 count
             }
             None => {
-                info!(?engine_id, engine_count = declared, "awaiting the engine group it declares");
+                info!(
+                    ?engine_id,
+                    engine_count = declared,
+                    "awaiting the engine group it declares"
+                );
                 *expected.insert(declared)
             }
         };

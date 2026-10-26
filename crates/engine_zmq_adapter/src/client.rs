@@ -2386,7 +2386,9 @@ mod tests {
             vec![declaring(Some("prefill")), declaring(Some("prefill"))],
         )
         .await;
-        prefill.check_declared_role(Some("prefill")).expect("prefill engines");
+        prefill
+            .check_declared_role(Some("prefill"))
+            .expect("prefill engines");
         let error = prefill.check_declared_role(Some("decode")).unwrap_err();
         assert!(
             error.contains("declared disaggregation role prefill") && error.contains("as decode"),
@@ -2401,10 +2403,15 @@ mod tests {
         )
         .await;
         let error = mixed.check_declared_role(Some("decode")).unwrap_err();
-        assert!(error.contains("declared disaggregation role prefill"), "{error}");
+        assert!(
+            error.contains("declared disaggregation role prefill"),
+            "{error}"
+        );
 
         let whole = tokenspeed_ranks(&dir.path().join("w"), vec![declaring(None)]).await;
-        whole.check_declared_role(None).expect("a whole-request engine");
+        whole
+            .check_declared_role(None)
+            .expect("a whole-request engine");
         let error = whole.check_declared_role(Some("prefill")).unwrap_err();
         assert!(error.contains("none (whole requests)"), "{error}");
 
@@ -2462,39 +2469,40 @@ mod tests {
             ),
             ("continue_generation", None, false),
         ] {
-            let (replies, ()) = tokio::join!(client.rl_control_call(method, body.clone(), wait), async {
-                let frames = engine_in.recv_frames().await.unwrap();
-                assert_eq!(
-                    TokenSpeedRequestType::from_frame(frames[0].as_ref()),
-                    Some(TokenSpeedRequestType::Control)
-                );
-                let (call_id, called, args): (i64, String, Vec<OpaqueValue>) =
-                    decode_msgpack(frames[1].as_ref()).unwrap();
-                assert_eq!(called, method);
-                match &body {
-                    Some(_) => {
-                        let fields = args[0].as_map().expect("the body as a map");
-                        assert!(fields.iter().any(|(key, value)| {
-                            key.as_str() == Some("version") && *value == OpaqueValue::from(7i64)
-                        }));
-                        assert!(fields.iter().any(|(key, value)| {
-                            key.as_str() == Some("flush_cache")
-                                && *value == OpaqueValue::Boolean(false)
-                        }));
+            let (replies, ()) =
+                tokio::join!(client.rl_control_call(method, body.clone(), wait), async {
+                    let frames = engine_in.recv_frames().await.unwrap();
+                    assert_eq!(
+                        TokenSpeedRequestType::from_frame(frames[0].as_ref()),
+                        Some(TokenSpeedRequestType::Control)
+                    );
+                    let (call_id, called, args): (i64, String, Vec<OpaqueValue>) =
+                        decode_msgpack(frames[1].as_ref()).unwrap();
+                    assert_eq!(called, method);
+                    match &body {
+                        Some(_) => {
+                            let fields = args[0].as_map().expect("the body as a map");
+                            assert!(fields.iter().any(|(key, value)| {
+                                key.as_str() == Some("version") && *value == OpaqueValue::from(7i64)
+                            }));
+                            assert!(fields.iter().any(|(key, value)| {
+                                key.as_str() == Some("flush_cache")
+                                    && *value == OpaqueValue::Boolean(false)
+                            }));
+                        }
+                        None => assert!(args.is_empty()),
                     }
-                    None => assert!(args.is_empty()),
-                }
-                let reply = ControlReplySlim {
-                    call_id,
-                    success,
-                    message: (!success).then(|| "not paused".to_string()),
-                    engine_index: 0,
-                };
-                engine_out
-                    .send_frames(vec![bytes::Bytes::from(encode_msgpack(&reply).unwrap())])
-                    .await
-                    .unwrap();
-            });
+                    let reply = ControlReplySlim {
+                        call_id,
+                        success,
+                        message: (!success).then(|| "not paused".to_string()),
+                        engine_index: 0,
+                    };
+                    engine_out
+                        .send_frames(vec![bytes::Bytes::from(encode_msgpack(&reply).unwrap())])
+                        .await
+                        .unwrap();
+                });
             let replies = replies.expect("one reply per rank");
             assert_eq!(replies.len(), 1);
             assert_eq!(replies[0].0, success);

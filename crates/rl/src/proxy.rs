@@ -770,7 +770,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(flushed.seen()[0], ("flush_cache".to_string(), None, Duration::from_secs(7)));
+        assert_eq!(
+            flushed.seen()[0],
+            ("flush_cache".to_string(), None, Duration::from_secs(7))
+        );
     }
 
     /// The engine connection carries POST operations named by one route

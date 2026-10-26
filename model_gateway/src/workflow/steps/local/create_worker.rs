@@ -2265,8 +2265,13 @@ mod tests {
         }
         for mode in [ConnectionMode::Http, ConnectionMode::Grpc] {
             for worker_type in [WorkerType::Prefill, WorkerType::Decode, WorkerType::Encode] {
-                validate_zmq_worker_type(mode, RuntimeType::Sglang, worker_type, "grpc://worker:8080")
-                    .expect("non-ZMQ transports serve every worker type");
+                validate_zmq_worker_type(
+                    mode,
+                    RuntimeType::Sglang,
+                    worker_type,
+                    "grpc://worker:8080",
+                )
+                .expect("non-ZMQ transports serve every worker type");
             }
         }
     }

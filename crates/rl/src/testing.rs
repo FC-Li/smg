@@ -211,7 +211,11 @@ impl RlControlCalls for FakeCalls {
 /// A TokenSpeed ZMQ worker with no control app, whose engine connection
 /// carries the RL routes as `calls`.
 pub fn zmq_worker(id: &str, calls: Arc<FakeCalls>) -> RlWorkerInfo {
-    let mut w = worker(id, &format!("ipc:///tmp/smg-zmq/{id}"), RuntimeType::TokenSpeed);
+    let mut w = worker(
+        id,
+        &format!("ipc:///tmp/smg-zmq/{id}"),
+        RuntimeType::TokenSpeed,
+    );
     w.connection_mode = ConnectionMode::Zmq;
     w.control_url = None;
     w.control_calls = Some(calls);

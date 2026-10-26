@@ -230,7 +230,9 @@ impl PreparedEncodeItem {
                     .unwrap_or_default();
                 let _shm_guard = TokenSpeedShmCleanupGuard(shm_handles);
                 match target {
-                    EncodeTarget::Grpc(endpoint) => send_tokenspeed_encode_rpc(endpoint, request).await,
+                    EncodeTarget::Grpc(endpoint) => {
+                        send_tokenspeed_encode_rpc(endpoint, request).await
+                    }
                     EncodeTarget::Zmq { worker, rendezvous } => {
                         send_tokenspeed_encode_frame(worker.as_ref(), &rendezvous, request).await
                     }
@@ -333,7 +335,9 @@ fn build_plan(
                     bootstrap_port: i32::from(bootstrap_port),
                 },
             },
-            ConnectionMode::Grpc | ConnectionMode::Http => EncodeTarget::Grpc(worker.url().to_string()),
+            ConnectionMode::Grpc | ConnectionMode::Http => {
+                EncodeTarget::Grpc(worker.url().to_string())
+            }
         };
         jobs.push(PreparedEncodeJob {
             item,

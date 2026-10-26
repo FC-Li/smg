@@ -861,15 +861,19 @@ impl ZmqEngineClient {
     /// fan-out submitted to the engine, each sub tagged with its proto
     /// `index`, left unmerged so a caller can end one choice without the
     /// others (the gRPC servicer matches string stops per choice).
-    /// Grid tensors keep the conservative reading here ([`GridTensors::Positions`]):
-    /// the router's direct-ZMQ path, which calls this, carries no model facts, so
-    /// an item with a vision grid is refused there as before; the Rust servicer,
-    /// which knows the model, calls [`Self::generate_tokenspeed_streams_for_model`].
+    /// A multimodal item's grid tensors are read with the model facts the
+    /// engine declared at its handshake ([`GridTensors::declared`]); an
+    /// engine that declares none keeps the conservative reading, which
+    /// refuses an item with a vision grid. The Rust servicer, which has the
+    /// launcher's facts, calls [`Self::generate_tokenspeed_streams_for_model`].
     pub async fn generate_tokenspeed_streams(
         &self,
         req: tokenspeed_proto::GenerateRequest,
     ) -> Result<Vec<TokenSpeedGenerateStream>, tonic::Status> {
-        self.generate_tokenspeed_streams_for_model(req, GridTensors::Positions)
+        let grid_tensors = self
+            .ready_response()
+            .map_or(GridTensors::Positions, GridTensors::declared);
+        self.generate_tokenspeed_streams_for_model(req, grid_tensors)
             .await
     }
 
